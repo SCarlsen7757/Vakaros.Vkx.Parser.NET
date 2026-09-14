@@ -31,8 +31,9 @@ VkxParser (static)
 
 ### Key Files
 
-- **`VkxParser.cs`** — static parser class. Entry point for all parsing. Reads the binary stream record-by-record using a `BinaryReader`. All values are little-endian.
-- **`VkxSession.cs`** — result object returned by the parser. Exposes typed `IEnumerable<T>` convenience properties for each record type.
+- **`VkxParser.cs`** — static parser class. Entry point for all parsing. Reads each row's full fixed-size payload into a stack buffer and decodes it with `BinaryPrimitives` (little-endian). Every overload has a `CancellationToken` variant.
+- **`VkxSession.cs`** — result object returned by the parser. Groups records by type once at construction and exposes typed `IReadOnlyList<T>` properties for each record type.
+- **`UnitConversions.cs`** — the only place unit conversion constants live.
 - **`Models/`** — one file per record type. All model types are `record` types inheriting from `VkxRecord`.
 - **`vkx_format.md`** — the VKX 1.4 binary format specification. Refer to this when adding support for new record types.
 

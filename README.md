@@ -23,6 +23,9 @@ VkxSession session = VkxParser.Parse(stream);
 
 // From a byte array
 VkxSession session = VkxParser.Parse(bytes);
+
+// Every overload accepts an optional CancellationToken
+VkxSession session = VkxParser.Parse(stream, cancellationToken);
 ```
 
 ## Accessing Records
@@ -44,6 +47,8 @@ foreach (RaceTimerEventRecord evt in session.RaceTimerEventRecords)
 foreach (VkxRecord record in session.Records)
     Console.WriteLine(record.Type);
 ```
+
+The per-type properties (`PositionRecords`, `WindRecords`, …) are `IReadOnlyList<T>` built once while parsing, so reading them repeatedly, taking `Count` or indexing is cheap.
 
 ## Supported Record Types
 
