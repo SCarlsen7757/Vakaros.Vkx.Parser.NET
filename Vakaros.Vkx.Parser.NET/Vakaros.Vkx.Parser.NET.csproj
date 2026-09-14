@@ -25,6 +25,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Raw as-recorded values are internal; tests verify them directly -->
+    <InternalsVisibleTo Include="Vakaros.Vkx.Parser.NET.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Pack the root README and logo into the NuGet package -->
     <None Include="..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\vkx-parser-logo.png" Pack="true" PackagePath="\" />

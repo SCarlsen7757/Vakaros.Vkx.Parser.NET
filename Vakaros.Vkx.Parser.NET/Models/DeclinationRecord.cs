@@ -12,8 +12,14 @@ public record DeclinationRecord : VkxRecord
     /// <summary>UTC timestamp of the measurement.</summary>
     public DateTimeOffset Timestamp { get; init; }
 
-    /// <summary>Magnetic declination offset in radians.</summary>
-    public float DeclinationOffset { get; init; }
+    /// <summary>Magnetic declination offset as recorded, in radians.</summary>
+    internal float RawDeclinationOffset { get; init; }
+
+    /// <summary>Magnetic declination offset in radians (SI).</summary>
+    public float DeclinationOffsetRadians => RawDeclinationOffset;
+
+    /// <summary>Magnetic declination offset in degrees.</summary>
+    public float DeclinationOffsetDegrees => UnitConversions.RadiansToDegrees(RawDeclinationOffset);
 
     /// <summary>Latitude in decimal degrees (WGS-84).</summary>
     public double Latitude { get; init; }

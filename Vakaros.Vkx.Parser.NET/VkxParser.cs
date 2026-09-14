@@ -263,9 +263,9 @@ public static class VkxParser
         Timestamp = Timestamp(payload, offset),
         Latitude = LatLon(payload, 8),
         Longitude = LatLon(payload, 12),
-        SpeedOverGround = F4(payload, 16),
-        CourseOverGround = F4(payload, 20),
-        Altitude = F4(payload, 24),
+        RawSpeedOverGround = F4(payload, 16),
+        RawCourseOverGround = F4(payload, 20),
+        RawAltitude = F4(payload, 24),
         QuaternionW = F4(payload, 28),
         QuaternionX = F4(payload, 32),
         QuaternionY = F4(payload, 36),
@@ -275,7 +275,7 @@ public static class VkxParser
     private static DeclinationRecord ParseDeclination(ReadOnlySpan<byte> payload, long offset) => new()
     {
         Timestamp = Timestamp(payload, offset),
-        DeclinationOffset = F4(payload, 8),
+        RawDeclinationOffset = F4(payload, 8),
         Latitude = LatLon(payload, 12),
         Longitude = LatLon(payload, 16),
     };
@@ -315,8 +315,8 @@ public static class VkxParser
         IsPort = payload[8] == 1,
         // The official spec lists "0 = auto, 0 = manual" (a typo); 1 is assumed to mean manual.
         IsManual = payload[9] == 1,
-        TrueHeading = F4(payload, 10),
-        SpeedOverGroundKnots = F4(payload, 14),
+        RawTrueHeading = F4(payload, 10),
+        RawSpeedOverGround = F4(payload, 14),
     };
 
     private static DeviceConfigurationRecord ParseDeviceConfiguration(ReadOnlySpan<byte> payload) => new()
@@ -329,27 +329,27 @@ public static class VkxParser
     private static WindRecord ParseWind(ReadOnlySpan<byte> payload, long offset) => new()
     {
         Timestamp = Timestamp(payload, offset),
-        WindDirection = F4(payload, 8),
-        WindSpeed = F4(payload, 12),
+        RawWindDirection = F4(payload, 8),
+        RawWindSpeed = F4(payload, 12),
     };
 
     private static SpeedThroughWaterRecord ParseSpeedThroughWater(ReadOnlySpan<byte> payload, long offset) => new()
     {
         Timestamp = Timestamp(payload, offset),
-        ForwardSpeed = F4(payload, 8),
-        HorizontalSpeed = F4(payload, 12),
+        RawForwardSpeed = F4(payload, 8),
+        RawHorizontalSpeed = F4(payload, 12),
     };
 
     private static DepthRecord ParseDepth(ReadOnlySpan<byte> payload, long offset) => new()
     {
         Timestamp = Timestamp(payload, offset),
-        Depth = F4(payload, 8),
+        RawDepth = F4(payload, 8),
     };
 
     private static TemperatureRecord ParseTemperature(ReadOnlySpan<byte> payload, long offset) => new()
     {
         Timestamp = Timestamp(payload, offset),
-        Temperature = F4(payload, 8),
+        RawTemperature = F4(payload, 8),
     };
 
     private static LoadRecord ParseLoad(ReadOnlySpan<byte> payload, long offset) => new()

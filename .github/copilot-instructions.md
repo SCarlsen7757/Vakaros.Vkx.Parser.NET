@@ -57,6 +57,7 @@ Versioning is handled by **GitVersion** (ContinuousDelivery mode). Version is in
 
 - **No external dependencies** — the parser must stay dependency-free. Do not add any NuGet references.
 - **All model types are `record`** — immutable, value-equality semantics.
-- **SI units everywhere** — metres, m/s, radians. Unit conversion is the caller's responsibility.
-- **`FormatVersion`** — the VKX format version byte from the first page header is exposed on `VkxSession.FormatVersion`.
+- **Units: raw, SI, imperial** — each measured value is stored once as an `internal` `Raw<Name>` property in the unit the spec records it in. Public properties are computed from it with an explicit unit suffix in two systems: SI (`…MetresPerSecond`, `…Radians`, `…Metres`, `…Celsius`) and imperial/nautical (`…Knots`, `…Degrees`, `…Feet`, `…Fahrenheit`). All conversions live in `UnitConversions`. Never expose a unit-less measured property.
+- **`FormatVersion`** — the VKX format version byte from the first page header is exposed on `VkxSession.FormatVersion`. A later page header with a different version is a `FormatException`.
+- **Error contract** — corrupt data throws `FormatException`; versions older than 1.4 throw `VkxUnsupportedVersionException`; truncation or unknown keys in a newer version set `VkxSession.IsPartial`. Never let `EndOfStreamException` or `ArgumentOutOfRangeException` escape.
 - **Internal records** — read and discard internal message payloads (keys 0x01, 0x07, 0x0E, 0x20, 0x21). They return `null` from `ParseRecord` and are not added to the records list.

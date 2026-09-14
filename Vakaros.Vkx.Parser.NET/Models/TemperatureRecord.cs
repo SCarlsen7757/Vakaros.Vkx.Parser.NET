@@ -12,6 +12,12 @@ public record TemperatureRecord : VkxRecord
     /// <summary>UTC timestamp of the measurement.</summary>
     public DateTimeOffset Timestamp { get; init; }
 
-    /// <summary>Temperature in degrees Celsius.</summary>
-    public float Temperature { get; init; }
+    /// <summary>Temperature as recorded, in degrees Celsius.</summary>
+    internal float RawTemperature { get; init; }
+
+    /// <summary>Temperature in degrees Celsius (SI-derived).</summary>
+    public float TemperatureCelsius => RawTemperature;
+
+    /// <summary>Temperature in degrees Fahrenheit (imperial).</summary>
+    public float TemperatureFahrenheit => UnitConversions.CelsiusToFahrenheit(RawTemperature);
 }

@@ -227,9 +227,9 @@ public class VkxParserTests
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
         Assert.Equal(rawLat * 1e-7, record.Latitude, precision: 10);
         Assert.Equal(rawLon * 1e-7, record.Longitude, precision: 10);
-        Assert.Equal(sog, record.SpeedOverGround);
-        Assert.Equal(cog, record.CourseOverGround);
-        Assert.Equal(alt, record.Altitude);
+        Assert.Equal(sog, record.RawSpeedOverGround);
+        Assert.Equal(cog, record.RawCourseOverGround);
+        Assert.Equal(alt, record.RawAltitude);
         Assert.Equal(qw, record.QuaternionW);
         Assert.Equal(qx, record.QuaternionX);
         Assert.Equal(qy, record.QuaternionY);
@@ -258,7 +258,7 @@ public class VkxParserTests
         var record = Assert.Single(session.Records.OfType<DeclinationRecord>());
 
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
-        Assert.Equal(decl, record.DeclinationOffset);
+        Assert.Equal(decl, record.RawDeclinationOffset);
         Assert.Equal(rawLat * 1e-7, record.Latitude, precision: 10);
         Assert.Equal(rawLon * 1e-7, record.Longitude, precision: 10);
     }
@@ -342,8 +342,8 @@ public class VkxParserTests
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
         Assert.Equal(expectedIsPort, record.IsPort);
         Assert.Equal(expectedIsManual, record.IsManual);
-        Assert.Equal(heading, record.TrueHeading);
-        Assert.Equal(sog, record.SpeedOverGroundKnots);
+        Assert.Equal(heading, record.RawTrueHeading);
+        Assert.Equal(sog, record.RawSpeedOverGround);
     }
 
     [Fact]
@@ -410,8 +410,8 @@ public class VkxParserTests
         var record = Assert.Single(session.Records.OfType<WindRecord>());
 
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
-        Assert.Equal(direction, record.WindDirection);
-        Assert.Equal(speed, record.WindSpeed);
+        Assert.Equal(direction, record.RawWindDirection);
+        Assert.Equal(speed, record.RawWindSpeed);
     }
 
     [Fact]
@@ -434,8 +434,8 @@ public class VkxParserTests
         var record = Assert.Single(session.Records.OfType<SpeedThroughWaterRecord>());
 
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
-        Assert.Equal(forward, record.ForwardSpeed);
-        Assert.Equal(horizontal, record.HorizontalSpeed);
+        Assert.Equal(forward, record.RawForwardSpeed);
+        Assert.Equal(horizontal, record.RawHorizontalSpeed);
     }
 
     [Fact]
@@ -456,7 +456,7 @@ public class VkxParserTests
         var record = Assert.Single(session.Records.OfType<DepthRecord>());
 
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
-        Assert.Equal(depth, record.Depth);
+        Assert.Equal(depth, record.RawDepth);
     }
 
     [Fact]
@@ -523,7 +523,7 @@ public class VkxParserTests
         var record = Assert.Single(session.Records.OfType<TemperatureRecord>());
 
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds((long)ts), record.Timestamp);
-        Assert.Equal(temp, record.Temperature);
+        Assert.Equal(temp, record.RawTemperature);
     }
 
     // ── Internal / skipped records ────────────────────────────────────────────
@@ -611,8 +611,8 @@ public class VkxParserTests
         Assert.Equal(10.0, pos.Longitude, precision: 5);
 
         var wind = session.WindRecords.First();
-        Assert.Equal(180.0f, wind.WindDirection);
-        Assert.Equal(5.0f, wind.WindSpeed);
+        Assert.Equal(180.0f, wind.RawWindDirection);
+        Assert.Equal(5.0f, wind.RawWindSpeed);
 
         var timer = session.RaceTimerEventRecords.First();
         Assert.Equal(TimerEventType.Start, timer.EventType);
