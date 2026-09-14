@@ -81,17 +81,18 @@ public class VkxParserTests
     // ── Version enforcement ───────────────────────────────────────────────────
 
     [Fact]
-    public void Version_BelowMinimum_ThrowsNotSupportedException()
+    public void Version_BelowMinimum_ThrowsVkxUnsupportedVersionException()
     {
         var data = Build(bw => WritePageHeader(bw, VkxFormatVersion.V1_3));
 
-        var ex = Assert.Throws<NotSupportedException>(() => ParseBytes(data));
+        var ex = Assert.Throws<VkxUnsupportedVersionException>(() => ParseBytes(data));
+        Assert.Equal(VkxFormatVersion.V1_3, ex.FormatVersion);
         Assert.Contains("0x04", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("1.4", ex.Message);
     }
 
     [Fact]
-    public void MissingPageHeader_ThrowsNotSupportedException()
+    public void MissingPageHeader_ThrowsFormatException()
     {
         // A stream that starts directly with a record key (no 0xFF page header).
         var data = Build(bw =>
@@ -109,7 +110,7 @@ public class VkxParserTests
             bw.Write(0.3f);
         });
 
-        Assert.Throws<NotSupportedException>(() => ParseBytes(data));
+        Assert.Throws<FormatException>(() => ParseBytes(data));
     }
 
     [Fact]

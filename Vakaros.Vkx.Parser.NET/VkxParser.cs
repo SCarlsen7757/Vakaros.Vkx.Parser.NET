@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 using Vakaros.Vkx.Parser.NET.Models;
 
@@ -6,126 +7,161 @@ namespace Vakaros.Vkx.Parser.NET;
 /// <summary>
 /// Parses VKX binary log files produced by Vakaros devices into a <see cref="VkxSession"/>.
 /// </summary>
+/// <remarks>
+/// Error contract for every <c>Parse</c> overload:
+/// <list type="bullet">
+///   <item><see cref="FormatException"/> — the data is corrupt: missing or inconsistent page header,
+///   an unknown record key or undefined enum value in a known format version, or a timestamp out of range.</item>
+///   <item><see cref="VkxUnsupportedVersionException"/> — the file's format version is older than
+///   <see cref="VkxFormatVersion.MinimumSupported"/>.</item>
+///   <item><see cref="VkxSession.IsPartial"/> — parsing stopped early because the stream ended mid-row,
+///   or an unknown record key was found in a format version newer than <see cref="VkxFormatVersion.MaxKnown"/>.</item>
+/// </list>
+/// </remarks>
 /// <example>
 /// <code>
 /// // From a file path
-/// VkxSession log = VkxParser.ParseFile("session.vkx");
+/// VkxSession session = VkxParser.ParseFile("session.vkx");
 ///
 /// // From a stream
-/// VkxSession log = VkxParser.Parse(stream);
+/// VkxSession session = VkxParser.Parse(stream);
 ///
 /// // From a byte array
-/// VkxLog log = VkxParser.Parse(bytes);
+/// VkxSession session = VkxParser.Parse(bytes);
 ///
 /// // Access typed records
-/// foreach (PositionRecord pos in log.PositionRecords)
+/// foreach (PositionRecord pos in session.PositionRecords)
 ///     Console.WriteLine($"{pos.Timestamp} lat={pos.Latitude} lon={pos.Longitude}");
 /// </code>
 /// </example>
 public static class VkxParser
 {
-    // Maps every known 1-byte key to the size of its fixed payload in bytes.
+    private const byte PageHeaderKey = 0xFF;
+
+    // Largest fixed payload in the spec (internal 0x21).
+    private const int MaxPayloadSize = 52;
+
+    // Cancellation is checked once per this many rows.
+    private const int CancellationCheckInterval = 4096;
+
+    // Latest instant DateTimeOffset can represent: 9999-12-31T23:59:59.999Z.
+    private const ulong MaxUnixMilliseconds = 253_402_300_799_999UL;
+
+    // Maps every known 1-byte key to the size of its fixed payload in bytes; 0 means unknown.
     // Internal messages are included so the parser can skip them correctly.
-    private static readonly Dictionary<byte, int> PayloadSizes = new()
+    private static readonly byte[] PayloadSizes = CreatePayloadSizes();
+
+    private static byte[] CreatePayloadSizes()
     {
-        { 0x01, 32 },   // Internal
-        { 0x02, 44 },   // Position, Velocity, Orientation
-        { 0x03, 20 },   // Declination
-        { 0x04, 13 },   // Race Timer Event
-        { 0x05, 17 },   // Line Position
-        { 0x06, 18 },   // Shift Angle
-        { 0x07, 12 },   // Internal
-        { 0x08, 13 },   // Device Configuration
-        { 0x0A, 16 },   // Wind
-        { 0x0B, 16 },   // Speed Through Water
-        { 0x0C, 12 },   // Depth
-        { 0x0E, 16 },   // Internal
-        { 0x0F, 16 },   // Load
-        { 0x10, 12 },   // Temperature
-        { 0x20, 13 },   // Internal
-        { 0x21, 52 },   // Internal
-        { 0xFE,  2 },   // Page Terminator
-    };
+        var sizes = new byte[256];
+        sizes[0x01] = 32;   // Internal
+        sizes[0x02] = 44;   // Position, Velocity, Orientation
+        sizes[0x03] = 20;   // Declination
+        sizes[0x04] = 13;   // Race Timer Event
+        sizes[0x05] = 17;   // Line Position
+        sizes[0x06] = 18;   // Shift Angle
+        sizes[0x07] = 12;   // Internal
+        sizes[0x08] = 13;   // Device Configuration
+        sizes[0x0A] = 16;   // Wind
+        sizes[0x0B] = 16;   // Speed Through Water
+        sizes[0x0C] = 12;   // Depth
+        sizes[0x0E] = 16;   // Internal
+        sizes[0x0F] = 16;   // Load
+        sizes[0x10] = 12;   // Temperature
+        sizes[0x20] = 13;   // Internal
+        sizes[0x21] = 52;   // Internal
+        sizes[0xFE] = 2;    // Page Terminator
+        sizes[0xFF] = 7;    // Page Header
+        return sizes;
+    }
 
     /// <summary>Parses a VKX file at the given path.</summary>
     /// <param name="filePath">Absolute or relative path to the .vkx file.</param>
-    /// <exception cref="NotSupportedException">
-    /// Thrown when the file's format version is older than <see cref="VkxFormatVersion.MinimumSupported"/>.
-    /// </exception>
-    /// <exception cref="FormatException">
-    /// Thrown when an unrecognised record key is encountered in a VKX 1.4 file.
-    /// </exception>
+    /// <exception cref="FormatException">The file is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
     public static VkxSession ParseFile(string filePath)
+        => ParseFile(filePath, CancellationToken.None);
+
+    /// <summary>Parses a VKX file at the given path.</summary>
+    /// <param name="filePath">Absolute or relative path to the .vkx file.</param>
+    /// <param name="cancellationToken">Token checked periodically while parsing.</param>
+    /// <exception cref="FormatException">The file is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static VkxSession ParseFile(string filePath, CancellationToken cancellationToken)
     {
         using var stream = File.OpenRead(filePath);
-        return Parse(stream);
+        return Parse(stream, cancellationToken);
     }
 
     /// <summary>Parses a VKX file from a byte array.</summary>
-    /// <exception cref="NotSupportedException">
-    /// Thrown when the file's format version is older than <see cref="VkxFormatVersion.MinimumSupported"/>.
-    /// </exception>
-    /// <exception cref="FormatException">
-    /// Thrown when an unrecognised record key is encountered in a VKX 1.4 file.
-    /// </exception>
+    /// <exception cref="FormatException">The data is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
     public static VkxSession Parse(byte[] data)
+        => Parse(data, CancellationToken.None);
+
+    /// <summary>Parses a VKX file from a byte array.</summary>
+    /// <param name="data">The complete file contents.</param>
+    /// <param name="cancellationToken">Token checked periodically while parsing.</param>
+    /// <exception cref="FormatException">The data is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static VkxSession Parse(byte[] data, CancellationToken cancellationToken)
     {
-        using var stream = new MemoryStream(data);
-        return Parse(stream);
+        ArgumentNullException.ThrowIfNull(data);
+        using var stream = new MemoryStream(data, writable: false);
+        return Parse(stream, cancellationToken);
     }
 
-    /// <summary>Parses a VKX file from a <see cref="Stream"/>. The stream is left open.</summary>
-    /// <exception cref="NotSupportedException">
-    /// Thrown when the file's format version is older than <see cref="VkxFormatVersion.MinimumSupported"/>.
-    /// </exception>
-    /// <exception cref="FormatException">
-    /// Thrown when an unrecognised record key is encountered in a file whose version is exactly
-    /// <see cref="VkxFormatVersion.MaxKnown"/> (all keys should be known for that version).
-    /// </exception>
+    /// <summary>
+    /// Parses a VKX file from a <see cref="Stream"/>, reading from its current position to the end.
+    /// The stream does not need to be seekable and is left open.
+    /// </summary>
+    /// <exception cref="FormatException">The data is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
     public static VkxSession Parse(Stream stream)
+        => Parse(stream, CancellationToken.None);
+
+    /// <summary>
+    /// Parses a VKX file from a <see cref="Stream"/>, reading from its current position to the end.
+    /// The stream does not need to be seekable and is left open.
+    /// </summary>
+    /// <param name="stream">The stream to read.</param>
+    /// <param name="cancellationToken">Token checked periodically while parsing.</param>
+    /// <exception cref="FormatException">The data is corrupt. See the <see cref="VkxParser"/> remarks.</exception>
+    /// <exception cref="VkxUnsupportedVersionException">The file's format version is not supported.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static VkxSession Parse(Stream stream, CancellationToken cancellationToken)
     {
-        using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);
+        ArgumentNullException.ThrowIfNull(stream);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var records = new List<VkxRecord>();
-        byte formatVersion = 0;
-        bool isPartial = false;
+        byte? formatVersion = null;
+        var isPartial = false;
+        long offset = 0;
+        long rowCount = 0;
+        Span<byte> buffer = stackalloc byte[MaxPayloadSize];
 
-        while (stream.Position < stream.Length)
+        while (true)
         {
-            byte key;
-            try
-            {
-                key = reader.ReadByte();
-            }
-            catch (EndOfStreamException)
-            {
+            if (++rowCount % CancellationCheckInterval == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
+            var keyValue = stream.ReadByte();
+            if (keyValue < 0)
                 break;
-            }
 
-            if (key == 0xFF)
-            {
-                var pageHeader = ParsePageHeader(reader);
+            var key = (byte)keyValue;
+            var rowOffset = offset;
 
-                if (formatVersion == 0)
-                {
-                    // First page header — enforce minimum supported version.
-                    if (pageHeader.FormatVersion < VkxFormatVersion.MinimumSupported)
-                        throw new NotSupportedException(
-                            $"VKX format version 0x{pageHeader.FormatVersion:X2} is older than the minimum " +
-                            $"supported version 1.4 (0x{VkxFormatVersion.MinimumSupported:X2}). This file cannot be parsed.");
-                }
+            if (formatVersion is null && key != PageHeaderKey)
+                throw new FormatException(
+                    $"The VKX data does not begin with a page header (0xFF); found key 0x{key:X2}. " +
+                    "The file may be corrupt or is not a VKX file.");
 
-                formatVersion = pageHeader.FormatVersion;
-                records.Add(pageHeader);
-                continue;
-            }
-
-            if (formatVersion == 0 && key != 0xFF)
-                throw new NotSupportedException(
-                    "The VKX file does not begin with a page header (0xFF). " +
-                    "The file may be corrupt or is not a valid VKX file.");
-
-            if (!PayloadSizes.ContainsKey(key))
+            int size = PayloadSizes[key];
+            if (size == 0)
             {
                 if (formatVersion > VkxFormatVersion.MaxKnown)
                 {
@@ -134,250 +170,192 @@ public static class VkxParser
                     break;
                 }
 
-                throw new FormatException(
-                    $"Unknown VKX record key: 0x{key:X2} at stream position {reader.BaseStream.Position - 1}.");
+                throw new FormatException($"Unknown VKX record key 0x{key:X2} at offset {rowOffset}.");
             }
 
-            VkxRecord? record;
-            try
+            var payload = buffer[..size];
+            if (stream.ReadAtLeast(payload, size, throwOnEndOfStream: false) < size)
             {
-                record = ParseRecord(reader, key);
-            }
-            catch (EndOfStreamException)
-            {
-                // Stream ended mid-payload (e.g. file copied while still being written).
+                // Stream ended mid-row (e.g. a file copied while still being written).
                 isPartial = true;
                 break;
             }
 
+            offset += 1 + size;
+
+            if (key == PageHeaderKey)
+            {
+                var version = payload[0];
+                if (formatVersion is null)
+                {
+                    if (version < VkxFormatVersion.MinimumSupported)
+                        throw new VkxUnsupportedVersionException(version);
+                    formatVersion = version;
+                }
+                else if (version != formatVersion)
+                {
+                    throw new FormatException(
+                        $"Inconsistent VKX format version at offset {rowOffset}: " +
+                        $"page header declares 0x{version:X2} but the file started with 0x{formatVersion:X2}.");
+                }
+
+                // Internal log state (6 bytes) is not exposed.
+                records.Add(new PageHeaderRecord { FormatVersion = version });
+                continue;
+            }
+
+            var isKnownVersion = formatVersion <= VkxFormatVersion.MaxKnown;
+            var record = ParseRecord(key, payload, isKnownVersion, rowOffset);
             if (record is not null)
                 records.Add(record);
         }
 
-        return new VkxSession(formatVersion, records, isPartial);
+        return new VkxSession(formatVersion ?? 0, records, isPartial);
     }
 
     // Returns null for internal record types that carry no public data.
-    private static VkxRecord? ParseRecord(BinaryReader reader, byte key) => key switch
+    private static VkxRecord? ParseRecord(byte key, ReadOnlySpan<byte> payload, bool isKnownVersion, long offset) => key switch
     {
-        0xFE => ParsePageTerminator(reader),
-        0x02 => ParsePosition(reader),
-        0x03 => ParseDeclination(reader),
-        0x04 => ParseRaceTimerEvent(reader),
-        0x05 => ParseLinePosition(reader),
-        0x06 => ParseShiftAngle(reader),
-        0x08 => ParseDeviceConfiguration(reader),
-        0x0A => ParseWind(reader),
-        0x0B => ParseSpeedThroughWater(reader),
-        0x0C => ParseDepth(reader),
-        0x0F => ParseLoad(reader),
-        0x10 => ParseTemperature(reader),
-        // Internal messages — read and discard payload.
-        0x01 => Skip(reader, 32),
-        0x07 => Skip(reader, 12),
-        0x0E => Skip(reader, 16),
-        0x20 => Skip(reader, 13),
-        0x21 => Skip(reader, 52),
-        _ => throw new FormatException($"Unknown VKX record key: 0x{key:X2} at stream position {reader.BaseStream.Position - 1}.")
+        0xFE => ParsePageTerminator(payload),
+        0x02 => ParsePosition(payload, offset),
+        0x03 => ParseDeclination(payload, offset),
+        0x04 => ParseRaceTimerEvent(payload, isKnownVersion, offset),
+        0x05 => ParseLinePosition(payload, isKnownVersion, offset),
+        0x06 => ParseShiftAngle(payload, offset),
+        0x08 => ParseDeviceConfiguration(payload),
+        0x0A => ParseWind(payload, offset),
+        0x0B => ParseSpeedThroughWater(payload, offset),
+        0x0C => ParseDepth(payload, offset),
+        0x0F => ParseLoad(payload, offset),
+        0x10 => ParseTemperature(payload, offset),
+        // Internal messages (0x01, 0x07, 0x0E, 0x20, 0x21) — payload already consumed and discarded.
+        _ => null,
     };
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private static VkxRecord? Skip(BinaryReader reader, int byteCount)
+    private static ulong U8(ReadOnlySpan<byte> payload, int index) => BinaryPrimitives.ReadUInt64LittleEndian(payload[index..]);
+    private static uint U4(ReadOnlySpan<byte> payload, int index) => BinaryPrimitives.ReadUInt32LittleEndian(payload[index..]);
+    private static ushort U2(ReadOnlySpan<byte> payload, int index) => BinaryPrimitives.ReadUInt16LittleEndian(payload[index..]);
+    private static int I4(ReadOnlySpan<byte> payload, int index) => BinaryPrimitives.ReadInt32LittleEndian(payload[index..]);
+    private static float F4(ReadOnlySpan<byte> payload, int index) => BinaryPrimitives.ReadSingleLittleEndian(payload[index..]);
+
+    /// <summary>Reads a Unix timestamp in milliseconds (U8 at payload index 0).</summary>
+    private static DateTimeOffset Timestamp(ReadOnlySpan<byte> payload, long offset)
     {
-        reader.ReadBytes(byteCount);
-        return null;
+        var milliseconds = U8(payload, 0);
+        if (milliseconds > MaxUnixMilliseconds)
+            throw new FormatException($"VKX timestamp {milliseconds} ms at offset {offset} is out of range.");
+        return DateTimeOffset.FromUnixTimeMilliseconds((long)milliseconds);
     }
 
-    /// <summary>Converts a Unix timestamp in milliseconds to a <see cref="DateTimeOffset"/>.</summary>
-    private static DateTimeOffset ToTimestamp(ulong milliseconds)
-        => DateTimeOffset.FromUnixTimeMilliseconds((long)milliseconds);
-
     /// <summary>Converts an I4 lat/lon value (10^-7 degrees) to decimal degrees.</summary>
-    private static double ToLatLon(int rawValue)
-        => rawValue * 1e-7;
+    private static double LatLon(ReadOnlySpan<byte> payload, int index)
+        => I4(payload, index) * 1e-7;
 
     // ── Record parsers ────────────────────────────────────────────────────────
 
-    private static PageHeaderRecord ParsePageHeader(BinaryReader reader)
+    private static PageTerminatorRecord ParsePageTerminator(ReadOnlySpan<byte> payload)
+        => new() { PreviousPageLength = U2(payload, 0) };
+
+    private static PositionRecord ParsePosition(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        byte version = reader.ReadByte();
-        reader.ReadBytes(6); // Internal log state — not exposed.
-        return new PageHeaderRecord { FormatVersion = version };
-    }
+        Timestamp = Timestamp(payload, offset),
+        Latitude = LatLon(payload, 8),
+        Longitude = LatLon(payload, 12),
+        SpeedOverGround = F4(payload, 16),
+        CourseOverGround = F4(payload, 20),
+        Altitude = F4(payload, 24),
+        QuaternionW = F4(payload, 28),
+        QuaternionX = F4(payload, 32),
+        QuaternionY = F4(payload, 36),
+        QuaternionZ = F4(payload, 40),
+    };
 
-    private static PageTerminatorRecord ParsePageTerminator(BinaryReader reader)
-        => new() { PreviousPageLength = reader.ReadUInt16() };
-
-    private static PositionRecord ParsePosition(BinaryReader reader)
+    private static DeclinationRecord ParseDeclination(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var lat = reader.ReadInt32();
-        var lon = reader.ReadInt32();
-        var sog = reader.ReadSingle();
-        var cog = reader.ReadSingle();
-        var altitude = reader.ReadSingle();
-        var qw = reader.ReadSingle();
-        var qx = reader.ReadSingle();
-        var qy = reader.ReadSingle();
-        var qz = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        DeclinationOffset = F4(payload, 8),
+        Latitude = LatLon(payload, 12),
+        Longitude = LatLon(payload, 16),
+    };
 
-        return new PositionRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            Latitude = ToLatLon(lat),
-            Longitude = ToLatLon(lon),
-            SpeedOverGround = sog,
-            CourseOverGround = cog,
-            Altitude = altitude,
-            QuaternionW = qw,
-            QuaternionX = qx,
-            QuaternionY = qy,
-            QuaternionZ = qz,
-        };
-    }
-
-    private static DeclinationRecord ParseDeclination(BinaryReader reader)
+    private static RaceTimerEventRecord ParseRaceTimerEvent(ReadOnlySpan<byte> payload, bool isKnownVersion, long offset)
     {
-        var timestamp = reader.ReadUInt64();
-        var declination = reader.ReadSingle();
-        var lat = reader.ReadInt32();
-        var lon = reader.ReadInt32();
-
-        return new DeclinationRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            DeclinationOffset = declination,
-            Latitude = ToLatLon(lat),
-            Longitude = ToLatLon(lon),
-        };
-    }
-
-    private static RaceTimerEventRecord ParseRaceTimerEvent(BinaryReader reader)
-    {
-        var timestamp = reader.ReadUInt64();
-        var eventType = reader.ReadByte();
-        var timerValue = reader.ReadInt32();
+        var eventType = payload[8];
+        if (isKnownVersion && eventType > (byte)TimerEventType.RaceEnd)
+            throw new FormatException($"Undefined race timer event type {eventType} at offset {offset}.");
 
         return new RaceTimerEventRecord
         {
-            Timestamp = ToTimestamp(timestamp),
+            Timestamp = Timestamp(payload, offset),
             EventType = (TimerEventType)eventType,
-            TimerValue = timerValue,
+            TimerValue = I4(payload, 9),
         };
     }
 
-    private static LinePositionRecord ParseLinePosition(BinaryReader reader)
+    private static LinePositionRecord ParseLinePosition(ReadOnlySpan<byte> payload, bool isKnownVersion, long offset)
     {
-        var timestamp = reader.ReadUInt64();
-        var lineEnd = reader.ReadByte();
-        var lat = reader.ReadSingle();
-        var lon = reader.ReadSingle();
+        var lineEnd = payload[8];
+        if (isKnownVersion && lineEnd > (byte)LineEndType.Boat)
+            throw new FormatException($"Undefined line end type {lineEnd} at offset {offset}.");
 
         return new LinePositionRecord
         {
-            Timestamp = ToTimestamp(timestamp),
+            Timestamp = Timestamp(payload, offset),
             LineEnd = (LineEndType)lineEnd,
-            Latitude = lat,
-            Longitude = lon,
+            Latitude = F4(payload, 9),
+            Longitude = F4(payload, 13),
         };
     }
 
-    private static ShiftAngleRecord ParseShiftAngle(BinaryReader reader)
+    private static ShiftAngleRecord ParseShiftAngle(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var tackId = reader.ReadByte();
-        var setBy = reader.ReadByte();
-        var trueHeading = reader.ReadSingle();
-        var sog = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        IsPort = payload[8] == 1,
+        // The official spec lists "0 = auto, 0 = manual" (a typo); 1 is assumed to mean manual.
+        IsManual = payload[9] == 1,
+        TrueHeading = F4(payload, 10),
+        SpeedOverGroundKnots = F4(payload, 14),
+    };
 
-        return new ShiftAngleRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            IsPort = tackId == 1,
-            IsManual = setBy == 1,
-            TrueHeading = trueHeading,
-            SpeedOverGroundKnots = sog,
-        };
-    }
-
-    private static DeviceConfigurationRecord ParseDeviceConfiguration(BinaryReader reader)
+    private static DeviceConfigurationRecord ParseDeviceConfiguration(ReadOnlySpan<byte> payload) => new()
     {
-        reader.ReadUInt64();              // Unused field per spec.
-        var bitfield = reader.ReadUInt32();
-        var loggingRate = reader.ReadByte();
+        // Bytes 0-7 are unused per spec.
+        IsFixedToBodyFrame = (U4(payload, 8) & 0x01) != 0,
+        TelemetryLoggingRate = payload[12],
+    };
 
-        return new DeviceConfigurationRecord
-        {
-            IsFixedToBodyFrame = (bitfield & 0x01) != 0,
-            TelemetryLoggingRate = loggingRate,
-        };
-    }
-
-    private static WindRecord ParseWind(BinaryReader reader)
+    private static WindRecord ParseWind(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var direction = reader.ReadSingle();
-        var speed = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        WindDirection = F4(payload, 8),
+        WindSpeed = F4(payload, 12),
+    };
 
-        return new WindRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            WindDirection = direction,
-            WindSpeed = speed,
-        };
-    }
-
-    private static SpeedThroughWaterRecord ParseSpeedThroughWater(BinaryReader reader)
+    private static SpeedThroughWaterRecord ParseSpeedThroughWater(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var forwardSpeed = reader.ReadSingle();
-        var horizontalSpeed = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        ForwardSpeed = F4(payload, 8),
+        HorizontalSpeed = F4(payload, 12),
+    };
 
-        return new SpeedThroughWaterRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            ForwardSpeed = forwardSpeed,
-            HorizontalSpeed = horizontalSpeed,
-        };
-    }
-
-    private static DepthRecord ParseDepth(BinaryReader reader)
+    private static DepthRecord ParseDepth(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var depth = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        Depth = F4(payload, 8),
+    };
 
-        return new DepthRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            Depth = depth,
-        };
-    }
-
-    private static TemperatureRecord ParseTemperature(BinaryReader reader)
+    private static TemperatureRecord ParseTemperature(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var temperature = reader.ReadSingle();
+        Timestamp = Timestamp(payload, offset),
+        Temperature = F4(payload, 8),
+    };
 
-        return new TemperatureRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            Temperature = temperature,
-        };
-    }
-
-    private static LoadRecord ParseLoad(BinaryReader reader)
+    private static LoadRecord ParseLoad(ReadOnlySpan<byte> payload, long offset) => new()
     {
-        var timestamp = reader.ReadUInt64();
-        var nameBytes = reader.ReadBytes(4);
-        var sensorName = Encoding.ASCII.GetString(nameBytes).TrimEnd('\0');
-        var load = reader.ReadSingle();
-
-        return new LoadRecord
-        {
-            Timestamp = ToTimestamp(timestamp),
-            SensorName = sensorName,
-            Load = load,
-        };
-    }
+        Timestamp = Timestamp(payload, offset),
+        SensorName = Encoding.ASCII.GetString(payload.Slice(8, 4)).TrimEnd('\0'),
+        Load = F4(payload, 12),
+    };
 }
