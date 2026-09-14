@@ -1,0 +1,51 @@
+# Configures GitHub's automatically generated release notes (used by publish.yml).
+#
+# Categories are matched IN ORDER and a PR lands in the FIRST one it matches,
+# so `breaking change` and `security` must come before the plain type labels.
+# The `*` catch-all must stay last.
+
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - wontfix
+      - needs info
+
+  categories:
+    - title: ⚠️ Breaking Changes
+      labels:
+        - breaking change
+
+    - title: 🔒 Security
+      labels:
+        - security
+
+    - title: ✨ Features
+      labels:
+        - feature
+
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+
+    - title: ⚡ Performance
+      labels:
+        - performance
+
+    - title: 📖 Documentation
+      labels:
+        - documentation
+
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
+
+    - title: 🧹 Maintenance
+      labels:
+        - refactor
+        - chore
+
+    # Anything merged without a type label.
+    - title: 🔎 Uncategorised
+      labels:
+        - "*"
