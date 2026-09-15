@@ -56,7 +56,7 @@ Unknown keys throw a `FormatException` (or end parsing as partial in a newer for
 
 The library is in **beta (0.x)**. A `breaking change` bumps the **minor** version (0.2.0 → 0.3.0); fixes and non-breaking features bump the patch. After 1.0.0, breaking changes bump the major version. The version is passed at build time — never hardcoded in the `.csproj`.
 
-- **Pull request / push to `main`** → `ci.yml` builds, tests and packs (version `0.0.0`, no publish).
+- **Pull request / push to `main`** → `ci.yml` builds, tests and packs as `<baseline>-ci.<run number>` (e.g. `0.1.0-ci.12`), no publish. Package validation rejects an assembly version below the baseline, so never use a placeholder like `0.0.0`.
 - **Release** → run `publish.yml` manually from `main` with the version (e.g. `0.2.0`). It checks the version is SemVer and untagged, builds, tests, packs, pushes to nuget.org via NuGet trusted publishing (OIDC), then creates tag `v<version>` and a GitHub Release with generated notes. 0.x and `-suffix` versions are marked pre-release.
 - Third-party actions are pinned to commit SHAs with a version comment; Dependabot proposes updates.
 
