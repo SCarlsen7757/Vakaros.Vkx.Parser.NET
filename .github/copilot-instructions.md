@@ -8,10 +8,17 @@ dotnet build --configuration Release
 dotnet pack --configuration Release --output ./nupkg
 
 # Build with explicit version (as done in CI)
-dotnet build --configuration Release /p:Version=1.0.0
+dotnet build --configuration Release -p:Version=0.2.0 -p:ContinuousIntegrationBuild=true
+
+# Test
+dotnet test --configuration Release
 ```
 
-No automated test suite exists yet. Manual testing against `.vkx` sample files is the current approach.
+Tests live in `Vakaros.Vkx.Parser.NET.Tests` (xUnit). Most build payloads with `BinaryWriter`; `TestData/*.vkx` is a real VKX 1.4 recording embedded as a resource. Add a test for every parser fix.
+
+### Package validation
+
+`dotnet pack` validates the public API against the last released package (`PackageValidationBaselineVersion`). An unintended break fails the build. For an intentional break, regenerate `Vakaros.Vkx.Parser.NET/CompatibilitySuppressions.xml` with `dotnet pack -p:ApiCompatGenerateSuppressionFile=true`, label the PR `breaking change`, and after each release bump the baseline to the new version and delete the suppression file.
 
 ---
 
@@ -41,16 +48,27 @@ VkxParser (static)
 
 VKX files are a sequence of fixed-size rows. Each row starts with a 1-byte key identifying the record type. The parser uses a lookup table (`PayloadSizes`) to know how many bytes to read for each key, and a `switch` expression (`ParseRecord`) to deserialize each type.
 
-Unknown keys throw a `FormatException`. Internal Vakaros message types (0x01, 0x07, 0x0E, 0x20, 0x21) are silently skipped.
+Unknown keys throw a `FormatException` (or end parsing as partial in a newer format version). Internal Vakaros message types (0x01, 0x07, 0x0E, 0x20, 0x21) are silently skipped.
 
 ---
 
-## NuGet Publish Workflow
+## Versioning & Publishing
 
-Versioning is handled by **GitVersion** (ContinuousDelivery mode). Version is injected at build time — never hardcoded in the `.csproj`.
+The library is in **beta (0.x)**. A `breaking change` bumps the **minor** version (0.2.0 → 0.3.0); fixes and non-breaking features bump the patch. After 1.0.0, breaking changes bump the major version. The version is passed at build time — never hardcoded in the `.csproj`.
 
-- **Pull request** → `ci.yml` builds and packs (no publish).
-- **Push to `main`** → `publish.yml` builds, packs, and pushes to nuget.org using the `NUGET_API_KEY` repository secret.
+- **Pull request / push to `main`** → `ci.yml` builds, tests and packs (version `0.0.0`, no publish).
+- **Release** → run `publish.yml` manually from `main` with the version (e.g. `0.2.0`). It checks the version is SemVer and untagged, builds, tests, packs, pushes to nuget.org via NuGet trusted publishing (OIDC), then creates tag `v<version>` and a GitHub Release with generated notes. 0.x and `-suffix` versions are marked pre-release.
+- Third-party actions are pinned to commit SHAs with a version comment; Dependabot proposes updates.
+
+---
+
+## Labels
+
+Flat **type + scope + meta** scheme (shared with SailSight). Release notes are grouped by these labels via `.github/release.yml`.
+
+- **Type — exactly one:** `bug`, `security`, `feature`, `performance`, `refactor`, `documentation`, `chore`.
+- **Scope — every one the change touches:** `library` (`Vakaros.Vkx.Parser.NET/**`), `tests` (`Vakaros.Vkx.Parser.NET.Tests/**`), `infra` (`.github/**`, packaging), `format` (VKX spec compliance: record layouts, units, versions, `vkx_format.md`).
+- **Meta — when it applies:** `breaking change` (public API break), `dependencies`, `blocked`, `needs info`, `upstream` (waiting on Vakaros to clarify the official spec). `good first issue` and `help wanted` are for issues only.
 
 ---
 

@@ -106,6 +106,10 @@ Streams do not need to be seekable; parsing reads from the current position to t
 
 - .NET 10.0 or later
 
+## Versioning
+
+This library is in **beta**. While the version is 0.x, a minor release (e.g. 0.2.0 → 0.3.0) may contain breaking API changes; patch releases do not. Breaking changes are listed first in each [GitHub Release](https://github.com/SCarlsen7757/Vakaros.Vkx.Parser.NET/releases).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
