@@ -4,8 +4,9 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Package version (e.g. 1.2.3)"
-        required: true
+        description: "Package version (e.g. 1.2.3). Empty for CI builds: derived from the package validation baseline."
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -23,17 +24,32 @@ jobs:
         with:
           dotnet-version: "10.x"
 
+      # Package validation requires the assembly version to be >= the baseline release, so CI
+      # builds (no explicit version) use "<baseline>-ci.<run>" instead of a placeholder like 0.0.0.
+      - name: Resolve version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$INPUT_VERSION" ]]; then
+            version="$INPUT_VERSION"
+          else
+            baseline=$(dotnet msbuild Vakaros.Vkx.Parser.NET/Vakaros.Vkx.Parser.NET.csproj -getProperty:PackageValidationBaselineVersion)
+            version="${baseline}-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "Package version: $version"
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+
       # ContinuousIntegrationBuild gives deterministic output with source-linked paths.
       - name: Build
-        run: dotnet build --configuration Release /p:Version=${{ inputs.version }} /p:ContinuousIntegrationBuild=true
+        run: dotnet build --configuration Release -p:Version="$PACKAGE_VERSION" -p:ContinuousIntegrationBuild=true
 
       - name: Test
         run: dotnet test --configuration Release --no-build
 
-      # Pack runs package validation against the 0.1.0 baseline; intentional API breaks
+      # Pack runs package validation against the baseline release; intentional API breaks
       # must be recorded in CompatibilitySuppressions.xml.
       - name: Pack
-        run: dotnet pack --configuration Release --no-build /p:Version=${{ inputs.version }} /p:ContinuousIntegrationBuild=true --output ./nupkg
+        run: dotnet pack --configuration Release --no-build -p:Version="$PACKAGE_VERSION" -p:ContinuousIntegrationBuild=true --output ./nupkg
 
       - name: Upload NuGet package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

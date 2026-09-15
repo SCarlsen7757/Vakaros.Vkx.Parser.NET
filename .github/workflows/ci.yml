@@ -15,5 +15,3 @@ jobs:
   build:
     name: Build & Pack
     uses: ./.github/workflows/build.yml
-    with:
-      version: '0.0.0'
